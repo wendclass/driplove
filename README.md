@@ -59,15 +59,21 @@ npm run start
 
 ---
 
-## 🔑 Identifiants Pré-Configurés
+---
 
-| Espace | URL | Identifiants | Rôle |
-| :--- | :--- | :--- | :--- |
-| **Pass d'accès** | `/sas` | Code : `IPERMIC-2026` | Sas d'accès étudiant |
-| **Étudiant (démo)** | `/connexion` | `Etudiant_Test` / `Test@2026!` | Compte pseudonyme |
-| **Super-Admin** | `/connexion` | `Responsable_IPERMIC` / `Admin@CJ2026!` | Super-administrateur (gestion, audit) |
-| **Écoutante 1** | `/connexion` | `Ecoute_Amina` / `Amina@CJ2026!` | Répondante interne |
-| **Écoutant 2** | `/connexion` | `Ecoute_Paul` / `Paul@CJ2026!` | Répondant interne |
+## 🔐 Configuration Initiale Sécurisée (« Premier Démarrage »)
+
+**Aucun identifiant par défaut ni compte pré-enregistré n'existe.**
+
+1. **Jeton d'Initialisation Unique** :
+   Au premier déploiement, configurez la variable d'environnement `SETUP_TOKEN` (ou utilisez le jeton généré automatiquement).
+2. **Création du Super-Administrateur** :
+   Accédez à l'URL : `/setup?token=<VOTRE_JETON_SETUP>`
+   - Définissez votre identifiant personnel et votre mot de passe robuste (min. 10 caractères, majuscule, minuscule, chiffre, symbole).
+   - Scannez le code 2FA TOTP obligatoire (Google Authenticator, Bitwarden, etc.) et sauvegardez vos 8 codes de secours.
+   - Dès la validation, la page `/setup` est **définitivement désactivée** (répond en 404 introuvable).
+3. **Invitation Sécurisée de l'Équipe** :
+   Depuis l'espace Super-Administrateur (`/admin`), invitez chaque écoutant par un lien à usage unique valable 48 heures. Chaque invité choisit son mot de passe et configure sa propre double authentification.
 
 ---
 

@@ -39,7 +39,8 @@ export interface AdminProfile {
   userId: string;
   displayName: string;
   internalEmail: string;
-  totpSecretEncrypted?: string;
+  totpSecretBase32?: string;
+  backupCodesHashed?: string[];
   charterAcceptedAt?: string;
   isOnDuty: boolean;
 }
@@ -128,6 +129,32 @@ export interface ResponseTemplate {
   updatedAt: string;
 }
 
+export interface AdminInvitation {
+  id: string;
+  token: string;
+  role: "RESPONDER" | "SUPERADMIN";
+  createdByAdminId: string;
+  createdAt: string;
+  expiresAt: string;
+  isUsed: boolean;
+  usedAt?: string;
+  usedByUserId?: string;
+}
+
+export interface SetupState {
+  completed: boolean;
+  completedAt?: string;
+  token?: string;
+  tokenExpiresAt?: string;
+}
+
+export interface LoginAttempt {
+  id: string;
+  pseudonym: string;
+  ipSubnet: string;
+  timestamp: number;
+}
+
 export interface AuditLog {
   id: string;
   createdAt: string;
@@ -142,8 +169,15 @@ export interface AuditLog {
     | "APPROVE_REVIEW"
     | "TRANSFER_CONVERSATION"
     | "CLOSE_CONVERSATION"
-    | "EXPORT_DATA";
-  targetResourceType: "CONVERSATION" | "TEMPLATE" | "USER" | "CHRONICLE";
+    | "EXPORT_DATA"
+    | "INITIAL_SETUP"
+    | "INVITE_ADMIN"
+    | "REVOKE_INVITATION"
+    | "ACCEPT_INVITATION"
+    | "DEACTIVATE_ADMIN"
+    | "REACTIVATE_ADMIN"
+    | "DELETE_ADMIN";
+  targetResourceType: "CONVERSATION" | "TEMPLATE" | "USER" | "CHRONICLE" | "INVITATION" | "SYSTEM";
   targetResourceId: string;
   metadataSanitized?: Record<string, unknown>;
   ipSubnetHash: string;

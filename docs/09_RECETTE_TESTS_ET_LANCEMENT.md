@@ -130,14 +130,10 @@ npm run dev
 # -> Accessible immédiatement sur http://localhost:3000
 ```
 
-### Comptes de démonstration pré-configurés pour tester le système :
-1. **Accès Étudiant** :
-   - Aller sur `/sas` $\rightarrow$ Saisir le pass : `CJ-IPERMIC-2026`
-   - Créer son pseudonyme ou se connecter avec un compte test.
-2. **Accès Répondant Back-Office** :
-   - Aller sur `/connexion`
-   - Identifiant : `Ecoute_Amina` | Mot de passe : `Amina@CJ2026!`
-   - Redirection automatique vers `/admin` avec file d'attente collaborative active.
-3. **Accès Super-Administrateur** :
-   - Identifiant : `Responsable_CJ` | Mot de passe : `Admin@CJ2026!`
-   - Accès au Journal d'Audit inaltérable (`/admin/audit`).
+### Accès et Gouvernance Sécurisée :
+1. **Initialisation Super-Administrateur** :
+   - Accéder à `/setup?token=<SETUP_TOKEN>` pour créer le compte maître avec 2FA obligatoire.
+2. **Invitations d'Équipe** :
+   - Création de liens à usage unique (validité 48h) depuis le back-office `/admin`.
+3. **Accès Étudiant** :
+   - Saisie du code saisonnier officiel validé par la cellule d'écoute sur `/sas`.

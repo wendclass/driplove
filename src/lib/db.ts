@@ -1,5 +1,6 @@
 import fs from "fs";
 import path from "path";
+import crypto from "crypto";
 import type {
   User,
   AdminProfile,
@@ -12,6 +13,9 @@ import type {
   Chronicle,
   ResponseTemplate,
   AuditLog,
+  AdminInvitation,
+  SetupState,
+  LoginAttempt,
   DecryptedConversation,
   DecryptedMessage,
   ConversationCategory,
@@ -24,6 +28,11 @@ import {
   verifyPassword,
   hashClubCode,
 } from "./crypto.ts";
+import {
+  verifyTotpCode,
+  verifyAndConsumeBackupCode,
+  hashBackupCode,
+} from "./totp.ts";
 
 interface DatabaseStore {
   clubPasses: ClubPass[];
@@ -37,6 +46,9 @@ interface DatabaseStore {
   chronicles: Chronicle[];
   responseTemplates: ResponseTemplate[];
   auditLogs: AuditLog[];
+  adminInvitations: AdminInvitation[];
+  setupState: SetupState;
+  loginAttempts: LoginAttempt[];
 }
 
 const DATA_DIR = path.join(process.cwd(), "data");
@@ -82,191 +94,30 @@ export function detectSensibility(text: string): {
   };
 }
 
+/**
+ * Initialisation d'un magasin de données 100% VIERGE
+ * Aucun compte démo, aucun mot de passe par défaut, aucun seed résiduel
+ */
 function getInitialStore(): DatabaseStore {
-  const initialCode = "CJ-IPERMIC-2026";
-  const passHash = hashClubCode(initialCode);
-
-  const adminSuperId = "u-super-1";
-  const adminAminaId = "u-amina-2";
-  const adminPaulId = "u-paul-3";
-
   return {
-    clubPasses: [
-      {
-        id: "pass-1",
-        codeHash: passHash,
-        seasonLabel: "Année académique 2026-2027",
-        isActive: true,
-        createdAt: new Date().toISOString(),
-        expiresAt: new Date(Date.now() + 365 * 24 * 3600 * 1000).toISOString(),
-      },
-    ],
-    users: [
-      {
-        id: adminSuperId,
-        pseudonym: "Responsable_CJ",
-        passwordHash: hashPassword("Admin@CJ2026!"),
-        role: "SUPERADMIN",
-        isActive: true,
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString(),
-      },
-      {
-        id: adminAminaId,
-        pseudonym: "Ecoute_Amina",
-        passwordHash: hashPassword("Amina@CJ2026!"),
-        role: "RESPONDER",
-        isActive: true,
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString(),
-      },
-      {
-        id: adminPaulId,
-        pseudonym: "Ecoute_Paul",
-        passwordHash: hashPassword("Paul@CJ2026!"),
-        role: "RESPONDER",
-        isActive: true,
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString(),
-      },
-    ],
-    adminProfiles: [
-      {
-        id: "prof-1",
-        userId: adminSuperId,
-        displayName: "Moussa B. (Super-Admin)",
-        internalEmail: "admin.cj@ujkz.bf",
-        charterAcceptedAt: new Date().toISOString(),
-        isOnDuty: true,
-      },
-      {
-        id: "prof-2",
-        userId: adminAminaId,
-        displayName: "Amina K.",
-        internalEmail: "amina.cj@ujkz.bf",
-        charterAcceptedAt: new Date().toISOString(),
-        isOnDuty: true,
-      },
-      {
-        id: "prof-3",
-        userId: adminPaulId,
-        displayName: "Paul S.",
-        internalEmail: "paul.cj@ujkz.bf",
-        charterAcceptedAt: new Date().toISOString(),
-        isOnDuty: true,
-      },
-    ],
+    clubPasses: [],
+    users: [],
+    adminProfiles: [],
     conversations: [],
     messages: [],
     messageLocks: [],
     internalNotes: [],
     reviewRequests: [],
-    chronicles: [
-      {
-        id: "chron-1",
-        title: "Mon copain me demande d'abandonner mon stage pour lui à Ouaga",
-        category: "COUPLE",
-        anonymizedQuestion:
-          "J'ai obtenu une opportunité de stage de deux mois dans une autre ville pour valider ma licence à l'IPERMIC. Mon partenaire me dit que si je pars, c'est que je ne l'aime pas assez et menace de rompre. J'ai peur de tout perdre.",
-        anonymizedResponse:
-          "Un amour sain et mature ne s'épanouit pas dans le sacrifice de l'avenir de l'autre. Un partenaire qui t'aime sincèrement encourage ton élévation et soutient ton diplôme. Le chantage émotionnel est souvent le signe d'une possessivité inquiétante, non d'une preuve d'amour.",
-        studentConsentGranted: true,
-        publishedAt: new Date(Date.now() - 5 * 24 * 3600 * 1000).toISOString(),
-      },
-      {
-        id: "chron-2",
-        title: "Tout le monde a l'air en couple et heureux sauf moi sur WhatsApp",
-        category: "SELF_ESTEEM",
-        anonymizedQuestion:
-          "J'ai 21 ans, je n'ai jamais eu de vraie relation et quand je vois les statuts de mes camarades de promotion, j'ai honte. J'ai l'impression d'avoir un problème ou d'être anormal.",
-        anonymizedResponse:
-          "Les réseaux sociaux sont des vitrines soigneusement choisies, jamais la réalité brute. La valeur d'une personne ne se mesure pas à son statut relationnel. Être célibataire à l'université est une opportunité formidable pour apprendre à se connaître et consolider son estime personnelle.",
-        studentConsentGranted: true,
-        publishedAt: new Date(Date.now() - 10 * 24 * 3600 * 1000).toISOString(),
-      },
-      {
-        id: "chron-3",
-        title: "Amoureux en secret de ma meilleure amie de promo",
-        category: "FRIENDSHIP",
-        anonymizedQuestion:
-          "Nous partageons nos cours et nos journées depuis deux ans. Je ressens bien plus que de l'amitié pour elle, mais j'ai une peur panique de briser notre belle complicité si je me déclare.",
-        anonymizedResponse:
-          "Ce sentiment est très fréquent et noble. Avant toute grande déclaration dramatique, il est souvent préférable de créer des moments privilégiés en dehors du cadre académique pour sonder subtilement son ressenti, sans lui imposer de pression.",
-        studentConsentGranted: true,
-        publishedAt: new Date(Date.now() - 15 * 24 * 3600 * 1000).toISOString(),
-      },
-    ],
-    responseTemplates: [
-      {
-        id: "tmpl-1",
-        title: "Modèle 1 : Accueil chaleureux & Première interrogation",
-        category: "GENERAL",
-        content: `Bonjour à toi,\n\nTout d'abord, merci pour ta confiance. Poser des mots sur ce qu'on ressent n'est jamais un exercice facile, et tu as eu le courage de faire cette démarche.\n\nJ'ai lu ton message avec une grande attention. Ce que tu décris montre à quel point cette situation te tient à cœur et combien elle suscite de questionnements en toi.\n\n[Insérer ici l'analyse bienveillante et les pistes de réflexion adaptées au cas]\n\nPrends le temps de laisser reposer ces quelques pensées. Si tu ressens le besoin d'approfondir un point ou de partager ce que cela t'inspire, ce fil reste ouvert pour toi.\n\nAvec toute notre bienveillance,\n— Dr IPLOVE`,
-        isActive: true,
-        updatedAt: new Date().toISOString(),
-      },
-      {
-        id: "tmpl-2",
-        title: "Modèle 2 : Rupture sentimentale & Chagrin de cœur",
-        category: "COUPLE",
-        content: `Bonjour,\n\nLa douleur d'une rupture est l'une des épreuves les plus intenses qu'on puisse traverser durant ses années universitaires. Tes sentiments actuels — la tristesse, le vide, peut-être la colère ou l'incompréhension — sont parfaitement légitimes.\n\nCe que tu ressens ne prouve pas que tu as échoué, mais simplement que tu as aimé sincèrement et avec générosité.\n\nDans les jours qui viennent, accorde-toi de la douceur. Évite de t'isoler : raccroche-toi à tes amis de confiance, à tes passions, à ton travail académique sans te mettre une pression excessive.\n\nLa guérison d'un cœur ne se fait pas en ligne droite, mais chaque journée traversée est une victoire sur la peine.\n\nNous sommes là si tu as besoin de déposer ton fardeau.\nChaleureusement,\n— Dr IPLOVE`,
-        isActive: true,
-        updatedAt: new Date().toISOString(),
-      },
-      {
-        id: "tmpl-3",
-        title: "Modèle 3 : Estime de soi, doutes et comparaison aux autres",
-        category: "SELF_ESTEEM",
-        content: `Bonjour,\n\nSur un campus, on a souvent l'impression que tout le monde maîtrise sa vie, ses amours et son avenir, sauf soi. C'est une illusion d'optique très fréquente.\n\nTu exprimes le sentiment de ne pas être à la hauteur ou de ne pas mériter l'attention de l'autre. Sache que ta valeur ne dépend pas du regard, de la validation ou du rejet de quelqu'un d'autre.\n\nTu as des qualités uniques qui méritent d'être reconnues d'abord par toi-même avant de pouvoir s'épanouir dans une relation saine.\n\nQu'est-ce qui, aujourd'hui, te ferait du bien rien qu'à toi, indépendamment des attentes d'autrui ?\n\nPrends soin de toi en priorité.\n— Dr IPLOVE`,
-        isActive: true,
-        updatedAt: new Date().toISOString(),
-      },
-      {
-        id: "tmpl-4",
-        title: "Modèle 4 : Conflit amical ou malentendu entre camarades",
-        category: "FRIENDSHIP",
-        content: `Bonjour,\n\nLes amitiés de fac sont souvent aussi intenses que des histoires d'amour, et quand la confiance est ébranlée, la blessure est profonde.\n\nEntre ce que la personne a voulu faire, ce qu'elle a fait, et ce que tu as ressenti, il y a parfois de gros malentendus amplifiés par la fierté ou les rumeurs.\n\nTrois questions peuvent t'aider à y voir plus clair :\n1. Cette personne a-t-elle déjà prouvé sa loyauté par le passé ?\n2. Est-elle capable d'entendre calmement ta blessure sans se braquer ?\n3. As-tu besoin d'une explication franche ou d'une distance temporaire pour te protéger ?\n\nNous restons à ton écoute si tu veux en parler davantage.\n— Dr IPLOVE`,
-        isActive: true,
-        updatedAt: new Date().toISOString(),
-      },
-      {
-        id: "tmpl-5",
-        title: "Modèle 5 : Relation ambiguë (Situationship / Flou)",
-        category: "COUPLE",
-        content: `Bonjour,\n\nL'ambiguïté est particulièrement épuisante psychologiquement : on espère sans pouvoir se projeter, on donne sans savoir ce qu'on reçoit en retour.\n\nTu as le droit fondamental de savoir où tu mets les pieds. Si une personne veut véritablement partager sa vie avec toi, elle ne te laissera pas constamment dans le doute.\n\nClarifier la situation par une conversation posée ne risque pas de 'gâcher' la relation : cela permet simplement de voir si vous marchez dans la même direction.\n\nTu mérites une relation où tu te sens choisi(e) et en sécurité.\n— Dr IPLOVE`,
-        isActive: true,
-        updatedAt: new Date().toISOString(),
-      },
-      {
-        id: "tmpl-6",
-        title: "Modèle 6 : Orientation vers le service médico-social de l'UJKZ",
-        category: "GENERAL",
-        content: `Bonjour,\n\nNous te remercions pour ta confiance sincère. La question que tu nous poses touche à un domaine très intime et important (santé physique / stress intense / santé reproductive).\n\nEn tant qu'étudiants de l'IPERMIC, notre rôle est de t'écouter fraternellement, mais nous n'avons pas la qualification médicale pour te guider avec la précision requise.\n\nNous t'encourageons vivement à consulter en toute discrétion les professionnels de l'Université :\n-> Centre Médico-Social de l'UJKZ (Consultations confidentielles et gratuites pour les étudiants).\n\nY aller n'est pas un aveu de faiblesse, c'est au contraire une preuve de maturité pour prendre soin de son corps et de son esprit.\n\nDonne-nous des nouvelles si tu le souhaites.\n— Dr IPLOVE`,
-        isActive: true,
-        updatedAt: new Date().toISOString(),
-      },
-      {
-        id: "tmpl-7",
-        title: "Modèle 7 : Alerte situation de détresse & Soutien d'urgence",
-        category: "GENERAL",
-        content: `Bonjour,\n\nJ'ai lu tes mots avec un profond respect et une vive émotion. Je mesure la lourdeur immense de la souffrance et de l'angoisse que tu traverses en ce moment.\n\nSache une chose avec certitude : tu n'es pas seul(e), et ce que tu vis n'est pas une fatalité.\n\nParce que ta sécurité et ta vie sont infiniment précieuses, nous tenons à ce que tu sois épaulé(e) par des personnes formées pour intervenir immédiatement.\n\nNous t'invitons de tout cœur à contacter sans attendre ces services d'aide gratuits et discrets :\n• Ligne Verte Nationale de Protection (Burkina Faso) : 80 00 11 11\n• Permanence Centre Médico-Social UJKZ : Campus Central\n• Sapeurs-Pompiers (Urgences vitales) : 18\n\nS'il te plaît, parle à l'un de ces services ou à une personne ressource proche dès maintenant. Reviens nous dire quand tu as pu faire ce pas.\n\nNous pensons très fort à toi.\n— Dr IPLOVE`,
-        isActive: true,
-        updatedAt: new Date().toISOString(),
-      },
-      {
-        id: "tmpl-8",
-        title: "Modèle 8 : Clôture bienveillante d'une conversation",
-        category: "GENERAL",
-        content: `Bonjour,\n\nC'est un vrai soulagement de lire que la situation s'est éclaircie et que tu te sens plus serein(e) aujourd'hui.\n\nNous allons marquer cette conversation comme close. Selon notre charte de confidentialité, elle s'effacera automatiquement dans 30 jours, mais tu peux aussi la supprimer toi-même à tout instant.\n\nSi de nouvelles interrogations surgissent un jour dans ton parcours, la porte du Dr IPLOVE te sera toujours ouverte.\n\nBonne continuation dans tes études et dans ta vie personnelle !\nFraternellement,\n— Dr IPLOVE`,
-        isActive: true,
-        updatedAt: new Date().toISOString(),
-      },
-    ],
+    chronicles: [],
+    responseTemplates: [],
     auditLogs: [],
+    adminInvitations: [],
+    setupState: { completed: false },
+    loginAttempts: [],
   };
 }
 
-class Database {
+class JsonDatabase {
   private store: DatabaseStore;
 
   constructor() {
@@ -280,7 +131,23 @@ class Database {
       }
       if (fs.existsSync(DB_FILE)) {
         const raw = fs.readFileSync(DB_FILE, "utf8");
-        return JSON.parse(raw);
+        const parsed = JSON.parse(raw);
+        return {
+          clubPasses: parsed.clubPasses || [],
+          users: parsed.users || [],
+          adminProfiles: parsed.adminProfiles || [],
+          conversations: parsed.conversations || [],
+          messages: parsed.messages || [],
+          messageLocks: parsed.messageLocks || [],
+          internalNotes: parsed.internalNotes || [],
+          reviewRequests: parsed.reviewRequests || [],
+          chronicles: parsed.chronicles || [],
+          responseTemplates: parsed.responseTemplates || [],
+          auditLogs: parsed.auditLogs || [],
+          adminInvitations: parsed.adminInvitations || [],
+          setupState: parsed.setupState || { completed: false },
+          loginAttempts: parsed.loginAttempts || [],
+        };
       }
     } catch (e) {
       console.error("Erreur lecture BDD :", e);
@@ -302,12 +169,428 @@ class Database {
     }
   }
 
-  // --- PASS CLUB ---
-  verifyClubPass(code: string): boolean {
-    const clean = (code || "").trim().toUpperCase();
-    if (clean === "IPERMIC-2026" || clean === "CJ-IPERMIC-2026" || clean === "LOVE-2026") {
-      return true;
+  // --- CONFIGURATION INITIALE & GOUVERNANCE SUPERADMIN ---
+  hasSuperadmin(): boolean {
+    return this.store.users.some(
+      (u) => u.role === "SUPERADMIN" && u.isActive
+    );
+  }
+
+  getSetupState(): SetupState {
+    if (this.hasSuperadmin()) {
+      return {
+        completed: true,
+        completedAt: this.store.setupState?.completedAt || new Date().toISOString(),
+      };
     }
+
+    const envToken = process.env.SETUP_TOKEN?.trim();
+    if (envToken && envToken.length >= 16) {
+      return {
+        completed: false,
+        token: envToken,
+        tokenExpiresAt: new Date(Date.now() + 24 * 3600 * 1000).toISOString(),
+      };
+    }
+
+    const now = Date.now();
+    if (
+      this.store.setupState?.token &&
+      this.store.setupState?.tokenExpiresAt &&
+      new Date(this.store.setupState.tokenExpiresAt).getTime() > now
+    ) {
+      return this.store.setupState;
+    }
+
+    const newToken = crypto.randomBytes(16).toString("hex");
+    const expiresAt = new Date(now + 30 * 60 * 1000).toISOString();
+    this.store.setupState = {
+      completed: false,
+      token: newToken,
+      tokenExpiresAt: expiresAt,
+    };
+    this.save();
+    return this.store.setupState;
+  }
+
+  verifySetupToken(token: string): boolean {
+    if (this.hasSuperadmin()) return false;
+    const state = this.getSetupState();
+    if (!state.token || !state.tokenExpiresAt) return false;
+    if (new Date(state.tokenExpiresAt).getTime() < Date.now()) return false;
+    return token.trim() === state.token;
+  }
+
+  completeInitialSetup(params: {
+    pseudonym: string;
+    passwordPlain: string;
+    displayName: string;
+    internalEmail: string;
+    totpSecretBase32: string;
+    backupCodes: string[];
+  }): { user?: User; error?: string } {
+    if (this.hasSuperadmin()) {
+      return { error: "La configuration initiale a déjà été effectuée." };
+    }
+
+    const cleanPseudo = params.pseudonym.trim();
+    if (cleanPseudo.length < 3) {
+      return { error: "L'identifiant doit comporter au moins 3 caractères." };
+    }
+
+    const userId = "u-super-" + crypto.randomBytes(4).toString("hex");
+    const now = new Date().toISOString();
+
+    const superUser: User = {
+      id: userId,
+      pseudonym: cleanPseudo,
+      passwordHash: hashPassword(params.passwordPlain),
+      role: "SUPERADMIN",
+      isActive: true,
+      createdAt: now,
+      updatedAt: now,
+    };
+
+    const backupHashes = (params.backupCodes || []).map((c) => hashBackupCode(c));
+
+    const adminProfile: AdminProfile = {
+      id: "prof-" + crypto.randomBytes(4).toString("hex"),
+      userId,
+      displayName: params.displayName.trim(),
+      internalEmail: params.internalEmail.trim(),
+      totpSecretBase32: params.totpSecretBase32.trim(),
+      backupCodesHashed: backupHashes,
+      charterAcceptedAt: now,
+      isOnDuty: true,
+    };
+
+    this.store.users.push(superUser);
+    this.store.adminProfiles.push(adminProfile);
+    this.store.setupState = {
+      completed: true,
+      completedAt: now,
+    };
+
+    this.logAudit({
+      adminId: userId,
+      adminName: params.displayName.trim(),
+      actionType: "INITIAL_SETUP",
+      targetResourceType: "SYSTEM",
+      targetResourceId: "initial-setup",
+      metadataSanitized: {
+        role: "SUPERADMIN",
+        twoFactorConfigured: true,
+        backupCodesCount: backupHashes.length,
+      },
+      ipSubnetHash: "system-setup",
+    });
+
+    this.save();
+    return { user: superUser };
+  }
+
+  // --- GESTION DES INVITATIONS ADMINISTRATEURS (48H, USAGE UNIQUE) ---
+  createAdminInvitation(
+    createdByAdminId: string,
+    createdByName: string,
+    role: "RESPONDER" | "SUPERADMIN" = "RESPONDER"
+  ): AdminInvitation {
+    const inv: AdminInvitation = {
+      id: "inv-" + crypto.randomBytes(6).toString("hex"),
+      token: crypto.randomBytes(24).toString("hex"),
+      role,
+      createdByAdminId,
+      createdAt: new Date().toISOString(),
+      expiresAt: new Date(Date.now() + 48 * 3600 * 1000).toISOString(),
+      isUsed: false,
+    };
+
+    if (!this.store.adminInvitations) {
+      this.store.adminInvitations = [];
+    }
+    this.store.adminInvitations.push(inv);
+
+    this.logAudit({
+      adminId: createdByAdminId,
+      adminName: createdByName,
+      actionType: "INVITE_ADMIN",
+      targetResourceType: "INVITATION",
+      targetResourceId: inv.id,
+      metadataSanitized: { role, expiresAt: inv.expiresAt },
+      ipSubnetHash: "admin-action",
+    });
+
+    this.save();
+    return inv;
+  }
+
+  getInvitationByToken(token: string): AdminInvitation | null {
+    if (!token) return null;
+    const inv = (this.store.adminInvitations || []).find(
+      (i) => i.token === token.trim()
+    );
+    if (!inv) return null;
+    if (inv.isUsed) return null;
+    if (new Date(inv.expiresAt).getTime() < Date.now()) return null;
+    return inv;
+  }
+
+  revokeInvitation(invitationId: string, adminId: string, adminName: string): boolean {
+    const inv = (this.store.adminInvitations || []).find((i) => i.id === invitationId);
+    if (!inv || inv.isUsed) return false;
+
+    this.store.adminInvitations = this.store.adminInvitations.filter(
+      (i) => i.id !== invitationId
+    );
+
+    this.logAudit({
+      adminId,
+      adminName,
+      actionType: "REVOKE_INVITATION",
+      targetResourceType: "INVITATION",
+      targetResourceId: invitationId,
+      metadataSanitized: { revokedAt: new Date().toISOString() },
+      ipSubnetHash: "admin-action",
+    });
+
+    this.save();
+    return true;
+  }
+
+  getAdminInvitations(): AdminInvitation[] {
+    return this.store.adminInvitations || [];
+  }
+
+  acceptAdminInvitation(
+    token: string,
+    params: {
+      pseudonym: string;
+      passwordPlain: string;
+      displayName: string;
+      internalEmail: string;
+      totpSecretBase32: string;
+      backupCodes: string[];
+      charterAccepted: boolean;
+    }
+  ): { user?: User; error?: string } {
+    const inv = this.getInvitationByToken(token);
+    if (!inv) {
+      return { error: "L'invitation est invalide, a expiré (délai de 48h) ou a déjà été utilisée." };
+    }
+
+    if (!params.charterAccepted) {
+      return { error: "L'acceptation formelle de la charte de confidentialité est obligatoire." };
+    }
+
+    const cleanPseudo = params.pseudonym.trim();
+    if (this.findUserByPseudonym(cleanPseudo)) {
+      return { error: "Cet identifiant est déjà utilisé. Choisis-en un autre." };
+    }
+
+    const userId = "u-adm-" + crypto.randomBytes(4).toString("hex");
+    const now = new Date().toISOString();
+
+    const user: User = {
+      id: userId,
+      pseudonym: cleanPseudo,
+      passwordHash: hashPassword(params.passwordPlain),
+      role: inv.role,
+      isActive: true,
+      createdAt: now,
+      updatedAt: now,
+    };
+
+    const backupHashes = (params.backupCodes || []).map((c) => hashBackupCode(c));
+
+    const adminProfile: AdminProfile = {
+      id: "prof-" + crypto.randomBytes(4).toString("hex"),
+      userId,
+      displayName: params.displayName.trim(),
+      internalEmail: params.internalEmail.trim(),
+      totpSecretBase32: params.totpSecretBase32.trim(),
+      backupCodesHashed: backupHashes,
+      charterAcceptedAt: now,
+      isOnDuty: true,
+    };
+
+    inv.isUsed = true;
+    inv.usedAt = now;
+    inv.usedByUserId = userId;
+
+    this.store.users.push(user);
+    this.store.adminProfiles.push(adminProfile);
+
+    this.logAudit({
+      adminId: userId,
+      adminName: params.displayName.trim(),
+      actionType: "ACCEPT_INVITATION",
+      targetResourceType: "USER",
+      targetResourceId: userId,
+      metadataSanitized: {
+        role: inv.role,
+        invitationId: inv.id,
+        twoFactorConfigured: true,
+      },
+      ipSubnetHash: "invitation-setup",
+    });
+
+    this.save();
+    return { user };
+  }
+
+  // --- GOUVERNANCE COMPTES ADMINISTRATEURS (DÉSACTIVATION / SUPPRESSION) ---
+  getAllAdminUsers(): Array<{ user: User; profile?: AdminProfile }> {
+    const adminUsers = this.store.users.filter(
+      (u) => u.role === "RESPONDER" || u.role === "SUPERADMIN"
+    );
+    return adminUsers.map((u) => ({
+      user: {
+        id: u.id,
+        pseudonym: u.pseudonym,
+        role: u.role,
+        isActive: u.isActive,
+        createdAt: u.createdAt,
+        updatedAt: u.updatedAt,
+        passwordHash: "",
+      },
+      profile: this.getAdminProfile(u.id) || undefined,
+    }));
+  }
+
+  setAdminUserStatus(
+    userId: string,
+    isActive: boolean,
+    actingAdminId: string,
+    actingAdminName: string
+  ): { success: boolean; error?: string } {
+    const target = this.findUserById(userId);
+    if (!target) return { success: false, error: "Utilisateur introuvable." };
+
+    if (!isActive && target.role === "SUPERADMIN") {
+      const activeSuperadmins = this.store.users.filter(
+        (u) => u.role === "SUPERADMIN" && u.isActive && u.id !== userId
+      );
+      if (activeSuperadmins.length === 0) {
+        return { success: false, error: "Impossible de désactiver le dernier Super-Administrateur." };
+      }
+    }
+
+    target.isActive = isActive;
+    target.updatedAt = new Date().toISOString();
+
+    this.logAudit({
+      adminId: actingAdminId,
+      adminName: actingAdminName,
+      actionType: isActive ? "REACTIVATE_ADMIN" : "DEACTIVATE_ADMIN",
+      targetResourceType: "USER",
+      targetResourceId: userId,
+      metadataSanitized: { targetPseudonym: target.pseudonym, isActive },
+      ipSubnetHash: "admin-governance",
+    });
+
+    this.save();
+    return { success: true };
+  }
+
+  deleteAdminUser(
+    userId: string,
+    actingAdminId: string,
+    actingAdminName: string
+  ): { success: boolean; error?: string } {
+    const target = this.findUserById(userId);
+    if (!target) return { success: false, error: "Utilisateur introuvable." };
+
+    if (target.role === "SUPERADMIN") {
+      const remainingSuper = this.store.users.filter(
+        (u) => u.role === "SUPERADMIN" && u.id !== userId
+      );
+      if (remainingSuper.length === 0) {
+        return { success: false, error: "Impossible de supprimer le seul Super-Administrateur." };
+      }
+    }
+
+    this.store.users = this.store.users.filter((u) => u.id !== userId);
+    this.store.adminProfiles = this.store.adminProfiles.filter((p) => p.userId !== userId);
+    this.store.messageLocks = this.store.messageLocks.filter((l) => l.lockedByAdminId !== userId);
+
+    this.logAudit({
+      adminId: actingAdminId,
+      adminName: actingAdminName,
+      actionType: "DELETE_ADMIN",
+      targetResourceType: "USER",
+      targetResourceId: userId,
+      metadataSanitized: { deletedPseudonym: target.pseudonym },
+      ipSubnetHash: "admin-governance",
+    });
+
+    this.save();
+    return { success: true };
+  }
+
+  // --- VÉRIFICATION 2FA & CODES DE SECOURS ---
+  verifyAdminTotp(
+    userId: string,
+    code: string
+  ): { valid: boolean; usedBackupCode?: boolean } {
+    const profile = this.getAdminProfile(userId);
+    if (!profile) return { valid: false };
+
+    if (profile.totpSecretBase32 && verifyTotpCode(profile.totpSecretBase32, code)) {
+      return { valid: true };
+    }
+
+    if (profile.backupCodesHashed && profile.backupCodesHashed.length > 0) {
+      const backupCheck = verifyAndConsumeBackupCode(code, profile.backupCodesHashed);
+      if (backupCheck.valid && backupCheck.matchingHashIndex !== undefined) {
+        profile.backupCodesHashed.splice(backupCheck.matchingHashIndex, 1);
+        this.save();
+        return { valid: true, usedBackupCode: true };
+      }
+    }
+
+    return { valid: false };
+  }
+
+  // --- SÉCURITÉ : RATE LIMITING & ANTI BRUTE-FORCE ---
+  recordLoginFailure(pseudonym: string, ipSubnet: string): void {
+    if (!this.store.loginAttempts) {
+      this.store.loginAttempts = [];
+    }
+    this.store.loginAttempts.push({
+      id: crypto.randomBytes(6).toString("hex"),
+      pseudonym: pseudonym.toLowerCase(),
+      ipSubnet,
+      timestamp: Date.now(),
+    });
+
+    const cutoff = Date.now() - 30 * 60 * 1000;
+    this.store.loginAttempts = this.store.loginAttempts.filter((a) => a.timestamp > cutoff);
+    this.save();
+  }
+
+  clearLoginFailures(pseudonym: string, ipSubnet: string): void {
+    if (!this.store.loginAttempts) return;
+    this.store.loginAttempts = this.store.loginAttempts.filter(
+      (a) => a.pseudonym !== pseudonym.toLowerCase() && a.ipSubnet !== ipSubnet
+    );
+    this.save();
+  }
+
+  isLoginLocked(pseudonym: string, ipSubnet: string): boolean {
+    if (!this.store.loginAttempts) return false;
+    const windowMs = 15 * 60 * 1000;
+    const now = Date.now();
+    const recent = this.store.loginAttempts.filter(
+      (a) =>
+        (a.pseudonym === pseudonym.toLowerCase() || a.ipSubnet === ipSubnet) &&
+        now - a.timestamp < windowMs
+    );
+    return recent.length >= 5;
+  }
+
+  // --- GESTION DU PASS COMMUNAUTAIRE (SANS VALEURS EN DUR) ---
+  verifyClubPass(code: string): boolean {
+    if (!code || typeof code !== "string") return false;
     const hash = hashClubCode(code.trim());
     const pass = this.store.clubPasses.find(
       (p) => p.codeHash === hash && p.isActive
@@ -315,7 +598,35 @@ class Database {
     return !!pass;
   }
 
-  // --- UTILISATEURS ---
+  createClubPass(
+    code: string,
+    seasonLabel: string,
+    adminId: string,
+    adminName: string
+  ): ClubPass {
+    const pass: ClubPass = {
+      id: "pass-" + crypto.randomBytes(4).toString("hex"),
+      codeHash: hashClubCode(code),
+      seasonLabel,
+      isActive: true,
+      createdAt: new Date().toISOString(),
+      expiresAt: new Date(Date.now() + 365 * 24 * 3600 * 1000).toISOString(),
+    };
+    this.store.clubPasses.push(pass);
+    this.logAudit({
+      adminId,
+      adminName,
+      actionType: "EXPORT_DATA",
+      targetResourceType: "SYSTEM",
+      targetResourceId: pass.id,
+      metadataSanitized: { seasonLabel },
+      ipSubnetHash: "admin-pass",
+    });
+    this.save();
+    return pass;
+  }
+
+  // --- RECHERCHE ET GESTION DES UTILISATEURS ---
   findUserByPseudonym(pseudonym: string): User | null {
     return (
       this.store.users.find(
@@ -379,7 +690,6 @@ class Database {
   }
 
   deleteStudentAccount(userId: string): boolean {
-    // Suppression en cascade complète : User, Conversations, Messages, Locks, Notes
     const userConversations = this.store.conversations.filter(
       (c) => c.studentId === userId
     );
@@ -460,29 +770,112 @@ class Database {
   }
 
   getStudentConversations(studentId: string): DecryptedConversation[] {
+    this.purgeExpiredConversations();
+
     const convs = this.store.conversations.filter(
       (c) => c.studentId === studentId
     );
-    return convs.map((c) => this.mapToDecryptedConversation(c));
+
+    return convs.map((c) => {
+      const msgs = this.store.messages
+        .filter((m) => m.conversationId === c.id)
+        .sort(
+          (a, b) =>
+            new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime()
+        )
+        .map((m) => ({
+          id: m.id,
+          conversationId: m.conversationId,
+          senderType: m.senderType,
+          content: decryptText(m.contentEncrypted, m.iv, m.authTag),
+          createdAt: m.createdAt,
+          readAt: m.readAt,
+        }));
+
+      let title: string | undefined;
+      if (c.titleEncrypted && c.titleIv) {
+        title = decryptText(c.titleEncrypted, c.titleIv);
+      }
+
+      return {
+        id: c.id,
+        category: c.category,
+        status: c.status,
+        priority: c.priority,
+        isSensitive: c.isSensitive,
+        title,
+        createdAt: c.createdAt,
+        updatedAt: c.updatedAt,
+        closedAt: c.closedAt,
+        autoPurgeAt: c.autoPurgeAt,
+        messages: msgs,
+      };
+    });
   }
 
   getConversationById(convId: string): DecryptedConversation | null {
     const c = this.store.conversations.find((item) => item.id === convId);
     if (!c) return null;
-    return this.mapToDecryptedConversation(c);
+
+    const msgs = this.store.messages
+      .filter((m) => m.conversationId === c.id)
+      .sort(
+        (a, b) =>
+          new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime()
+      )
+      .map((m) => ({
+        id: m.id,
+        conversationId: m.conversationId,
+        senderType: m.senderType,
+        content: decryptText(m.contentEncrypted, m.iv, m.authTag),
+        createdAt: m.createdAt,
+        readAt: m.readAt,
+      }));
+
+    let title: string | undefined;
+    if (c.titleEncrypted && c.titleIv) {
+      title = decryptText(c.titleEncrypted, c.titleIv);
+    }
+
+    const student = this.findUserById(c.studentId);
+
+    const activeLock = this.getActiveLock(c.id);
+
+    return {
+      id: c.id,
+      studentPseudonym: student?.pseudonym || "Anonyme",
+      category: c.category,
+      status: c.status,
+      priority: c.priority,
+      isSensitive: c.isSensitive,
+      title,
+      createdAt: c.createdAt,
+      updatedAt: c.updatedAt,
+      closedAt: c.closedAt,
+      autoPurgeAt: c.autoPurgeAt,
+      lock: activeLock
+        ? {
+            lockedByAdminId: activeLock.lockedByAdminId,
+            lockedByName: activeLock.lockedByName,
+            expiresAt: activeLock.expiresAt,
+            isLockedByMe: false,
+          }
+        : undefined,
+      messages: msgs,
+    };
   }
 
-  addStudentMessage(
+  addStudentReply(
     convId: string,
     studentId: string,
-    textPlain: string
+    contentPlain: string
   ): Message | null {
     const conv = this.store.conversations.find(
       (c) => c.id === convId && c.studentId === studentId
     );
     if (!conv) return null;
 
-    const enc = encryptText(textPlain);
+    const enc = encryptText(contentPlain);
     const msg: Message = {
       id: "m-" + Math.random().toString(36).substring(2, 9),
       conversationId: convId,
@@ -495,6 +888,13 @@ class Database {
 
     conv.status = "NEW";
     conv.updatedAt = new Date().toISOString();
+
+    const { isSensitive, priority } = detectSensibility(contentPlain);
+    if (isSensitive) {
+      conv.isSensitive = true;
+      conv.priority = priority;
+    }
+
     this.store.messages.push(msg);
     this.save();
     return msg;
@@ -521,145 +921,179 @@ class Database {
     this.store.conversations = this.store.conversations.filter(
       (c) => c.id !== convId
     );
+
     this.save();
     return true;
   }
 
-  // --- BACK-OFFICE & MULTI-RÉPONDANTS ---
-  getAdminQueue(
-    adminId: string,
-    filter?: {
-      status?: string;
-      category?: string;
-      onlyAssignedToMe?: boolean;
-      onlyUnassigned?: boolean;
-      onlySensitive?: boolean;
-    }
-  ): Array<
+  // --- GESTION DES EXPIRATIONS (RÉTENTION STRICTE 30 JOURS) ---
+  purgeExpiredConversations(): number {
+    const now = Date.now();
+    const thirtyDaysAgo = now - 30 * 24 * 3600 * 1000;
+
+    const expired = this.store.conversations.filter((c) => {
+      const updated = new Date(c.updatedAt).getTime();
+      return updated < thirtyDaysAgo;
+    });
+
+    if (expired.length === 0) return 0;
+
+    const expiredIds = new Set(expired.map((c) => c.id));
+    this.store.messages = this.store.messages.filter(
+      (m) => !expiredIds.has(m.conversationId)
+    );
+    this.store.internalNotes = this.store.internalNotes.filter(
+      (n) => !expiredIds.has(n.conversationId)
+    );
+    this.store.messageLocks = this.store.messageLocks.filter(
+      (l) => !expiredIds.has(l.conversationId)
+    );
+    this.store.reviewRequests = this.store.reviewRequests.filter(
+      (r) => !expiredIds.has(r.conversationId)
+    );
+    this.store.conversations = this.store.conversations.filter(
+      (c) => !expiredIds.has(c.id)
+    );
+
+    this.save();
+    return expired.length;
+  }
+
+  // --- BACK-OFFICE MULTI-RÉPONDANTS & ANTI-COLLISION ---
+  getAdminQueue(filter?: {
+    unassignedOnly?: boolean;
+    assignedToAdminId?: string;
+    sensitiveOnly?: boolean;
+  }): Array<
     DecryptedConversation & {
-      studentPseudonym: string;
       assignedToName?: string;
       isLockedByMe: boolean;
       notesCount: number;
     }
   > {
-    const now = Date.now();
-    // Nettoyage des verrous expirés
-    this.store.messageLocks = this.store.messageLocks.filter(
-      (l) => new Date(l.expiresAt).getTime() > now
-    );
+    this.purgeExpiredConversations();
+    this.cleanupExpiredLocks();
 
-    let list = [...this.store.conversations];
+    let list = this.store.conversations;
 
-    if (filter?.status) {
-      list = list.filter((c) => c.status === filter.status);
-    }
-    if (filter?.category) {
-      list = list.filter((c) => c.category === filter.category);
-    }
-    if (filter?.onlySensitive) {
+    if (filter?.sensitiveOnly) {
       list = list.filter((c) => c.isSensitive);
     }
 
-    return list
-      .map((c) => {
-        const student = this.store.users.find((u) => u.id === c.studentId);
-        const lock = this.store.messageLocks.find(
-          (l) => l.conversationId === c.id
-        );
-        const notes = this.store.internalNotes.filter(
-          (n) => n.conversationId === c.id
-        );
-        const dec = this.mapToDecryptedConversation(c);
+    const priorityWeight: Record<PriorityLevel, number> = {
+      CRITICAL: 3,
+      HIGH: 2,
+      NORMAL: 1,
+    };
 
-        return {
-          ...dec,
-          studentPseudonym: student?.pseudonym || "Étudiant(e)",
-          assignedToName: lock?.lockedByName,
-          isLockedByMe: lock?.lockedByAdminId === adminId,
-          notesCount: notes.length,
-        };
-      })
-      .filter((item) => {
-        if (filter?.onlyAssignedToMe) return item.isLockedByMe;
-        if (filter?.onlyUnassigned) return !item.assignedToName;
-        return true;
-      })
-      .sort((a, b) => {
-        // Priorité aux messages sensibles
-        if (a.isSensitive && !b.isSensitive) return -1;
-        if (!a.isSensitive && b.isSensitive) return 1;
-        return (
-          new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime()
-        );
-      });
+    const mapped = list.map((c) => {
+      const decrypted = this.getConversationById(c.id)!;
+      const lock = this.store.messageLocks.find(
+        (l) => l.conversationId === c.id
+      );
+      const isLockedByMe =
+        lock?.lockedByAdminId === filter?.assignedToAdminId;
+      const notes = this.store.internalNotes.filter(
+        (n) => n.conversationId === c.id
+      );
+
+      return {
+        ...decrypted,
+        assignedToName: lock ? lock.lockedByName : undefined,
+        isLockedByMe: !!isLockedByMe,
+        notesCount: notes.length,
+      };
+    });
+
+    let filtered = mapped;
+    if (filter?.unassignedOnly) {
+      filtered = mapped.filter((item) => !item.assignedToName);
+    } else if (filter?.assignedToAdminId) {
+      filtered = mapped.filter((item) => item.isLockedByMe);
+    }
+
+    return filtered.sort((a, b) => {
+      const pDiff =
+        priorityWeight[b.priority] - priorityWeight[a.priority];
+      if (pDiff !== 0) return pDiff;
+      return (
+        new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime()
+      );
+    });
   }
 
+  // --- VERROUILLAGE ANTI-COLLISION (20 MINUTES) ---
   acquireLock(
-    convId: string,
+    conversationId: string,
     adminId: string,
     adminName: string
-  ): { success: boolean; message?: string; lock?: MessageLock } {
-    const now = Date.now();
+  ): { success: boolean; message?: string; lockedBy?: string } {
+    this.cleanupExpiredLocks();
+
     const existing = this.store.messageLocks.find(
-      (l) => l.conversationId === convId
+      (l) => l.conversationId === conversationId
     );
 
     if (existing) {
-      if (
-        new Date(existing.expiresAt).getTime() > now &&
-        existing.lockedByAdminId !== adminId
-      ) {
-        return {
-          success: false,
-          message: `Ce message est actuellement pris en charge par ${existing.lockedByName}.`,
-          lock: existing,
-        };
+      if (existing.lockedByAdminId === adminId) {
+        existing.expiresAt = new Date(
+          Date.now() + 20 * 60 * 1000
+        ).toISOString();
+        this.save();
+        return { success: true };
       }
+      return {
+        success: false,
+        message: `Dossier actuellement pris en charge par ${existing.lockedByName}. Verrouillage anti-collision actif.`,
+        lockedBy: existing.lockedByName,
+      };
     }
 
-    // Poser ou renouveler le verrou pour 20 minutes
-    const expiresAt = new Date(now + 20 * 60 * 1000).toISOString();
     const newLock: MessageLock = {
-      conversationId: convId,
+      conversationId,
       lockedByAdminId: adminId,
       lockedByName: adminName,
-      lockedAt: new Date(now).toISOString(),
-      expiresAt,
+      lockedAt: new Date().toISOString(),
+      expiresAt: new Date(Date.now() + 20 * 60 * 1000).toISOString(),
     };
 
-    this.store.messageLocks = this.store.messageLocks.filter(
-      (l) => l.conversationId !== convId
+    const conv = this.store.conversations.find(
+      (c) => c.id === conversationId
     );
-    this.store.messageLocks.push(newLock);
-
-    const conv = this.store.conversations.find((c) => c.id === convId);
     if (conv && conv.status === "NEW") {
       conv.status = "IN_PROGRESS";
       conv.updatedAt = new Date().toISOString();
     }
+
+    this.store.messageLocks = this.store.messageLocks.filter(
+      (l) => l.conversationId !== conversationId
+    );
+    this.store.messageLocks.push(newLock);
 
     this.logAudit({
       adminId,
       adminName,
       actionType: "ACQUIRE_LOCK",
       targetResourceType: "CONVERSATION",
-      targetResourceId: convId,
-      metadata: { adminName, expiresAt },
+      targetResourceId: conversationId,
+      metadataSanitized: { adminName, expiresAt: newLock.expiresAt },
+      ipSubnetHash: "local-node",
     });
 
     this.save();
-    return { success: true, lock: newLock };
+    return { success: true };
   }
 
-  releaseLock(convId: string, adminId: string): boolean {
+  releaseLock(conversationId: string, adminId: string): boolean {
     const existing = this.store.messageLocks.find(
-      (l) => l.conversationId === convId
+      (l) => l.conversationId === conversationId
     );
-    if (!existing || existing.lockedByAdminId !== adminId) return false;
+    if (!existing || existing.lockedByAdminId !== adminId) {
+      return false;
+    }
 
     this.store.messageLocks = this.store.messageLocks.filter(
-      (l) => l.conversationId !== convId
+      (l) => l.conversationId !== conversationId
     );
 
     this.logAudit({
@@ -667,26 +1101,47 @@ class Database {
       adminName: existing.lockedByName,
       actionType: "RELEASE_LOCK",
       targetResourceType: "CONVERSATION",
-      targetResourceId: convId,
+      targetResourceId: conversationId,
+      ipSubnetHash: "local-node",
     });
 
     this.save();
     return true;
   }
 
+  getActiveLock(conversationId: string): MessageLock | null {
+    this.cleanupExpiredLocks();
+    return (
+      this.store.messageLocks.find(
+        (l) => l.conversationId === conversationId
+      ) || null
+    );
+  }
+
+  private cleanupExpiredLocks(): void {
+    const now = Date.now();
+    const active = this.store.messageLocks.filter(
+      (l) => new Date(l.expiresAt).getTime() > now
+    );
+    if (active.length !== this.store.messageLocks.length) {
+      this.store.messageLocks = active;
+      this.save();
+    }
+  }
+
+  // --- RÉPONSE COLLECTIVE DR IPLOVE (SIGNATURE UNIQUE) ---
   sendAdminResponse(
-    convId: string,
+    conversationId: string,
     adminId: string,
     adminName: string,
     responsePlain: string
-  ): Message | null {
-    const conv = this.store.conversations.find((c) => c.id === convId);
-    if (!conv) return null;
-
+  ): Message {
     const enc = encryptText(responsePlain);
+    const msgId = "m-" + Math.random().toString(36).substring(2, 9);
+
     const msg: Message = {
-      id: "m-" + Math.random().toString(36).substring(2, 9),
-      conversationId: convId,
+      id: msgId,
+      conversationId,
       senderType: "DR_IPLOVE",
       senderAdminIdInternal: adminId,
       contentEncrypted: enc.encryptedHex,
@@ -695,13 +1150,17 @@ class Database {
       createdAt: new Date().toISOString(),
     };
 
-    conv.status = "ANSWERED";
-    conv.updatedAt = new Date().toISOString();
+    const conv = this.store.conversations.find(
+      (c) => c.id === conversationId
+    );
+    if (conv) {
+      conv.status = "ANSWERED";
+      conv.updatedAt = new Date().toISOString();
+    }
 
     this.store.messages.push(msg);
-    // Libération du verrou après réponse
     this.store.messageLocks = this.store.messageLocks.filter(
-      (l) => l.conversationId !== convId
+      (l) => l.conversationId !== conversationId
     );
 
     this.logAudit({
@@ -709,16 +1168,18 @@ class Database {
       adminName,
       actionType: "SEND_RESPONSE",
       targetResourceType: "CONVERSATION",
-      targetResourceId: convId,
-      metadata: { signature: "Dr IPLOVE" },
+      targetResourceId: conversationId,
+      metadataSanitized: { signature: "Dr IPLOVE" },
+      ipSubnetHash: "local-node",
     });
 
     this.save();
     return msg;
   }
 
+  // --- NOTES INTERNES (SECRET ÉTUDIANT PRÉSERVÉ) ---
   addInternalNote(
-    convId: string,
+    conversationId: string,
     adminId: string,
     adminName: string,
     notePlain: string
@@ -726,7 +1187,7 @@ class Database {
     const enc = encryptText(notePlain);
     const note: InternalNote = {
       id: "n-" + Math.random().toString(36).substring(2, 9),
-      conversationId: convId,
+      conversationId,
       authorAdminId: adminId,
       authorName: adminName,
       noteEncrypted: enc.encryptedHex,
@@ -741,138 +1202,91 @@ class Database {
   }
 
   getInternalNotes(
-    convId: string
-  ): Array<{ id: string; authorName: string; text: string; createdAt: string }> {
+    conversationId: string
+  ): Array<{ id: string; authorName: string; note: string; createdAt: string }> {
     return this.store.internalNotes
-      .filter((n) => n.conversationId === convId)
+      .filter((n) => n.conversationId === conversationId)
       .map((n) => ({
         id: n.id,
         authorName: n.authorName,
-        text: decryptText(n.noteEncrypted, n.iv, n.authTag),
+        note: decryptText(n.noteEncrypted, n.iv, n.authTag),
         createdAt: n.createdAt,
       }));
   }
 
+  // --- PROTOCOLE DE RELECTURE À 4 YEUX ---
   requestReview(
-    convId: string,
+    conversationId: string,
     adminId: string,
     adminName: string,
-    draftPlain: string
+    draftPlain: string,
+    notes?: string
   ): ReviewRequest {
     const enc = encryptText(draftPlain);
     const req: ReviewRequest = {
       id: "rev-" + Math.random().toString(36).substring(2, 9),
-      conversationId: convId,
+      conversationId,
       requestedByAdminId: adminId,
       requestedByName: adminName,
       draftContentEncrypted: enc.encryptedHex,
       iv: enc.ivHex,
       authTag: enc.authTagHex,
       reviewStatus: "PENDING",
+      feedbackNotes: notes,
       createdAt: new Date().toISOString(),
     };
 
-    const conv = this.store.conversations.find((c) => c.id === convId);
+    const conv = this.store.conversations.find(
+      (c) => c.id === conversationId
+    );
     if (conv) {
       conv.status = "UNDER_REVIEW";
       conv.updatedAt = new Date().toISOString();
     }
 
     this.store.reviewRequests.push(req);
-    this.logAudit({
-      adminId,
-      adminName,
-      actionType: "SUBMIT_REVIEW",
-      targetResourceType: "CONVERSATION",
-      targetResourceId: convId,
-    });
-
     this.save();
     return req;
   }
 
-  // --- CHRONIQUES & MODÈLES ---
+  // --- CHRONIQUES PUBLIQUES ---
   getPublicChronicles(): Chronicle[] {
-    return this.store.chronicles.filter((c) => c.studentConsentGranted);
+    return this.store.chronicles
+      .filter((c) => c.studentConsentGranted)
+      .sort(
+        (a, b) =>
+          new Date(b.publishedAt).getTime() - new Date(a.publishedAt).getTime()
+      );
   }
 
-  getResponseTemplates(): ResponseTemplate[] {
-    return this.store.responseTemplates.filter((t) => t.isActive);
+  // --- MODÈLES DE RÉPONSES ---
+  getResponseTemplates(category?: ConversationCategory): ResponseTemplate[] {
+    let t = this.store.responseTemplates.filter((item) => item.isActive);
+    if (category) {
+      t = t.filter(
+        (item) => item.category === category || item.category === "GENERAL"
+      );
+    }
+    return t;
   }
 
-  getAuditLogs(): AuditLog[] {
-    return [...this.store.auditLogs].reverse().slice(0, 100);
-  }
-
-  private logAudit(params: {
-    adminId: string;
-    adminName: string;
-    actionType: AuditLog["actionType"];
-    targetResourceType: AuditLog["targetResourceType"];
-    targetResourceId: string;
-    metadata?: Record<string, unknown>;
-  }): void {
+  // --- JOURNAL D'AUDIT INALTÉRABLE ---
+  logAudit(entry: Omit<AuditLog, "id" | "createdAt">): void {
     const log: AuditLog = {
       id: "log-" + Math.random().toString(36).substring(2, 9),
       createdAt: new Date().toISOString(),
-      adminId: params.adminId,
-      adminName: params.adminName,
-      actionType: params.actionType,
-      targetResourceType: params.targetResourceType,
-      targetResourceId: params.targetResourceId,
-      metadataSanitized: params.metadata,
-      ipSubnetHash: "local-node",
+      ...entry,
     };
-    this.store.auditLogs.push(log);
+    this.store.auditLogs.unshift(log);
+    if (this.store.auditLogs.length > 2000) {
+      this.store.auditLogs = this.store.auditLogs.slice(0, 2000);
+    }
+    this.save();
   }
 
-  // Helper interne
-  private mapToDecryptedConversation(c: Conversation): DecryptedConversation {
-    const msgs = this.store.messages
-      .filter((m) => m.conversationId === c.id)
-      .map((m) => {
-        return {
-          id: m.id,
-          conversationId: m.conversationId,
-          senderType: m.senderType,
-          content: decryptText(m.contentEncrypted, m.iv, m.authTag),
-          createdAt: m.createdAt,
-          readAt: m.readAt,
-        } as DecryptedMessage;
-      });
-
-    let title: string | undefined;
-    if (c.titleEncrypted && c.titleIv) {
-      title = decryptText(c.titleEncrypted, c.titleIv);
-    }
-
-    const lock = this.store.messageLocks.find(
-      (l) => l.conversationId === c.id
-    );
-
-    return {
-      id: c.id,
-      category: c.category,
-      status: c.status,
-      priority: c.priority,
-      isSensitive: c.isSensitive,
-      title,
-      createdAt: c.createdAt,
-      updatedAt: c.updatedAt,
-      closedAt: c.closedAt,
-      autoPurgeAt: c.autoPurgeAt,
-      lock: lock
-        ? {
-            lockedByAdminId: lock.lockedByAdminId,
-            lockedByName: lock.lockedByName,
-            expiresAt: lock.expiresAt,
-            isLockedByMe: false,
-          }
-        : undefined,
-      messages: msgs,
-    };
+  getAuditLogs(): AuditLog[] {
+    return this.store.auditLogs;
   }
 }
 
-// Singleton d'instance
-export const db = new Database();
+export const db = new JsonDatabase();

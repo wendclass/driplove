@@ -62,7 +62,7 @@ export default async function AdminLayout({
               </span>
             </div>
             <span className="text-[11px] text-zinc-500 block font-body">
-              Rôle : {session.role === "SUPERADMIN" ? "Super-Administrateur" : "Écoutant IPERMIC"}
+              Rôle : {session.role === "SUPERADMIN" ? "Super-Administrateur" : "Écoutant Répondant"}
             </span>
           </div>
 
@@ -85,13 +85,23 @@ export default async function AdminLayout({
             </Link>
 
             {isSuperAdmin && (
-              <Link
-                href="/admin/audit"
-                className="flex items-center gap-2.5 px-3 py-2.5 rounded-xl text-xs font-semibold text-ink-secondary dark:text-ink-muted hover:bg-canvas-light dark:hover:bg-canvas-dark font-sans transition-colors"
-              >
-                <FileText className="w-4 h-4 text-brand-accent" />
-                <span>Journal d&apos;Audit inaltérable</span>
-              </Link>
+              <>
+                <Link
+                  href="/admin/equipe"
+                  className="flex items-center gap-2.5 px-3 py-2.5 rounded-xl text-xs font-semibold text-ink-secondary dark:text-ink-muted hover:bg-canvas-light dark:hover:bg-canvas-dark font-sans transition-colors"
+                >
+                  <Users className="w-4 h-4 text-brand-mint" />
+                  <span>Équipe & Invitations</span>
+                </Link>
+
+                <Link
+                  href="/admin/audit"
+                  className="flex items-center gap-2.5 px-3 py-2.5 rounded-xl text-xs font-semibold text-ink-secondary dark:text-ink-muted hover:bg-canvas-light dark:hover:bg-canvas-dark font-sans transition-colors"
+                >
+                  <FileText className="w-4 h-4 text-brand-accent" />
+                  <span>Journal d&apos;Audit inaltérable</span>
+                </Link>
+              </>
             )}
 
             <div className="pt-3 mt-3 border-t border-line-subtle dark:border-line-dark">

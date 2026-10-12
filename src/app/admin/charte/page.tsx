@@ -16,7 +16,7 @@ export default function AdminChartePage() {
         <div>
           <h1 className="text-xl font-bold text-ink-primary dark:text-ink-light font-sans flex items-center gap-2">
             <ShieldCheck className="w-5 h-5 text-black dark:text-white" />
-            <span>Charte Déontologique des Répondants IPERMIC</span>
+            <span>Charte Déontologique des Répondants Dr IPLOVE</span>
           </h1>
           <p className="text-xs text-zinc-500 font-body">
             Engagement solennel d&apos;honneur liant chaque membre de l&apos;équipe d&apos;écoute Dr IPLOVE.

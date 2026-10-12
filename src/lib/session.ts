@@ -4,9 +4,19 @@ import { db } from "./db";
 import crypto from "crypto";
 
 const SESSION_COOKIE = "dr_iplove_session";
-const SESSION_SECRET =
-  process.env.SESSION_SECRET ||
-  "c6a2b8e4d1f03759a8c2e1f4b7a9d3e5f2a1b4c7d0e9f8a2b5c4d3e2f1a0b9c8";
+
+function getSessionSecret(): Buffer {
+  if (process.env.SESSION_SECRET && process.env.SESSION_SECRET.trim().length >= 32) {
+    return Buffer.from(process.env.SESSION_SECRET.trim(), "utf8");
+  }
+  // En l'absence de variable configurée, clé éphémère aléatoire forte en mémoire
+  // Aucune clé statique par défaut n'est écrite en clair
+  const g = globalThis as unknown as { __EPHEMERAL_SESSION_SECRET?: Buffer };
+  if (!g.__EPHEMERAL_SESSION_SECRET) {
+    g.__EPHEMERAL_SESSION_SECRET = crypto.randomBytes(32);
+  }
+  return g.__EPHEMERAL_SESSION_SECRET;
+}
 
 export interface SessionData {
   userId: string;
@@ -22,7 +32,7 @@ export function signToken(data: Omit<SessionData, "expiresAt">): string {
   const jsonStr = JSON.stringify(payload);
   const base64 = Buffer.from(jsonStr).toString("base64url");
   const signature = crypto
-    .createHmac("sha256", SESSION_SECRET)
+    .createHmac("sha256", getSessionSecret())
     .update(base64)
     .digest("base64url");
   return `${base64}.${signature}`;
@@ -34,11 +44,12 @@ export function verifyToken(token: string): SessionData | null {
     if (!base64 || !signature) return null;
 
     const expectedSig = crypto
-      .createHmac("sha256", SESSION_SECRET)
+      .createHmac("sha256", getSessionSecret())
       .update(base64)
       .digest("base64url");
 
     if (
+      signature.length !== expectedSig.length ||
       !crypto.timingSafeEqual(
         Buffer.from(signature),
         Buffer.from(expectedSig)
@@ -65,7 +76,16 @@ export async function getSession(): Promise<SessionData | null> {
   const cookieStore = await cookies();
   const token = cookieStore.get(SESSION_COOKIE)?.value;
   if (!token) return null;
-  return verifyToken(token);
+  const session = verifyToken(token);
+  if (!session) return null;
+
+  // Invalidation immédiate si le compte est désactivé ou supprimé
+  const user = db.findUserById(session.userId);
+  if (!user || !user.isActive) {
+    return null;
+  }
+
+  return session;
 }
 
 export async function setSession(user: User): Promise<void> {

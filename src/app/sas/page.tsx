@@ -73,12 +73,12 @@ export default function SasPage() {
                 type="text"
                 value={code}
                 onChange={(e) => setCode(e.target.value)}
-                placeholder="Ex: IPERMIC-2026"
+                placeholder="Code secret saisonnier"
                 className="w-full px-3.5 py-3 rounded-xl border border-zinc-300 dark:border-zinc-800 bg-white dark:bg-zinc-900 text-black dark:text-white text-sm focus:outline-none focus:ring-2 focus:ring-black dark:focus:ring-white font-mono uppercase tracking-wider"
                 required
               />
               <span className="text-[11px] text-zinc-500 mt-1.5 block">
-                Code d&apos;accès actif : <code className="bg-zinc-100 dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 px-1.5 py-0.5 rounded text-black dark:text-white">IPERMIC-2026</code>
+                Saisis le code saisonnier confidentiel communiqué par la cellule d&apos;écoute.
               </span>
             </div>
 
